@@ -1,13 +1,13 @@
 # Molly's Kitchen — Migsun Twiinz, ETA 2
 
-## Run locally (offline Viva-Safe mode, no keys needed)
+## Run locally
 ```
 cd frontend
 npm install
 npm run dev        # http://localhost:5173
 ```
 Resident: sign in with any valid 10-digit number; the demo OTP is shown on screen (Auto-fill).
-Kitchen: switch to "Kitchen" and use "Instant demo login" (phone 9729099722, PIN molly123).
+Kitchen: switch to "Kitchen" and use the shared password(shared to owner).
 
 ## Going live (shared data across devices): see DEPLOY.md
 
@@ -18,6 +18,5 @@ Kitchen: switch to "Kitchen" and use "Instant demo login" (phone 9729099722, PIN
 Blank keys always fall back to offline mode.
 
 ## Notes
-- Dinner orders ignore the 6 PM – cutoff window while "Demo mode" is on (Kitchen > Tonight's dinner). Turn it off for real use.
-- Real SMS OTP is not integrated; the OTP is displayed on screen (viva-safe).
+- Real SMS OTP is not integrated; the OTP is displayed on screen.
 - Enable Realtime for the `orders` table in Supabase to get live sync, and add RLS policies allowing the anon key to read `orders`.
