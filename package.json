@@ -1,0 +1,10 @@
+{
+  "name": "mollys-kitchen",
+  "private": true,
+  "scripts": {
+    "setup": "npm install && npm --prefix backend install && npm --prefix frontend install && node scripts/setup-env.js",
+    "dev": "concurrently -n API,WEB -c yellow,cyan \"npm --prefix backend run dev\" \"npm --prefix frontend run dev\"",
+    "build": "npm --prefix frontend run build"
+  },
+  "devDependencies": { "concurrently": "^8.2.2" }
+}
