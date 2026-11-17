@@ -35,6 +35,11 @@ jobs:
 
       - name: Build
         working-directory: ./frontend
+        env:
+          VITE_API_URL: ${{ secrets.VITE_API_URL || vars.VITE_API_URL || 'https://mollys-kitchen-backend.onrender.com' }}
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL || vars.VITE_SUPABASE_URL || 'https://zjtppkcuqynsykkbqfbx.supabase.co' }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY || vars.VITE_SUPABASE_ANON_KEY || 'sb_publishable_McEC8EgCSwcuiojYghBxGQ_CdMK5-xu' }}
+          VITE_RAZORPAY_KEY_ID: ${{ secrets.VITE_RAZORPAY_KEY_ID || vars.VITE_RAZORPAY_KEY_ID || 'rzp_test_U0SanP4GAn1pvi' }}
         run: npm run build
 
       - name: Setup Pages
