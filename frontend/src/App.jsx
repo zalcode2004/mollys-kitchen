@@ -73,38 +73,82 @@ const Photo = ({ src, alt }) => (src && src.startsWith('data:') ? (
 
 /* ------------------------------ RESIDENT ------------------------------ */
 function LoginModal({ onDone, onClose }) {
-  const [f, setF] = useState({ name: '', phone: '', tower: 'SUN 1', flat: '' });
-  const [otp, setOtp] = useState(null);
+  const real = !!supabase; // real email OTP when Supabase is connected; on-screen demo OTP only in offline mode
+  const [f, setF] = useState({ name: '', phone: '', email: '', tower: 'SUN 1', flat: '' });
+  const [stage, setStage] = useState('form');
+  const [demoOtp, setDemoOtp] = useState(null);
   const [typed, setTyped] = useState('');
   const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [cool, setCool] = useState(0);
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
-  const send = () => {
-    if (!f.name.trim() || !/^[6-9]\d{9}$/.test(f.phone) || !f.flat.trim()) return setErr('Enter your name, a valid 10-digit mobile number and your flat number.');
-    setErr(''); setOtp(String(1000 + Math.floor(Math.random() * 9000)));
+  useEffect(() => { if (cool <= 0) return undefined; const t = setTimeout(() => setCool(cool - 1), 1000); return () => clearTimeout(t); }, [cool]);
+
+  const friendly = (m = '') => {
+    const x = m.toLowerCase();
+    if (x.includes('rate limit') || x.includes('security purposes')) return 'Too many codes requested. Please wait a minute and try again.';
+    if (x.includes('not authorized')) return 'This email address cannot receive codes yet. The kitchen needs to finish the email setup.';
+    if (x.includes('expired') || x.includes('invalid')) return 'That code is wrong or has expired. Check it or request a new one.';
+    return m || 'Something went wrong. Please try again.';
   };
-  const verify = () => (typed === otp ? onDone({ ...f, name: f.name.trim(), flat: f.flat.trim() }) : setErr('That OTP does not match. Try again.'));
+  const send = async () => {
+    const email = f.email.trim().toLowerCase();
+    if (!f.name.trim() || !/^[6-9]\d{9}$/.test(f.phone) || !f.flat.trim()) return setErr('Enter your name, a valid 10-digit mobile number and your flat number.');
+    if (real && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return setErr('Enter a valid email address. We will send your code there.');
+    setErr(''); setBusy(true);
+    if (real) {
+      const { error } = await supabase.auth.signInWithOtp({ email, options: { shouldCreateUser: true } });
+      setBusy(false);
+      if (error) return setErr(friendly(error.message));
+      setCool(60);
+    } else { setBusy(false); setDemoOtp(String(100000 + Math.floor(Math.random() * 900000))); }
+    setTyped(''); setStage('code');
+  };
+  const verify = async () => {
+    const code = typed.trim();
+    if (!code) return setErr('Enter the code.');
+    setErr(''); setBusy(true);
+    const done = () => onDone({ name: f.name.trim(), phone: f.phone, email: f.email.trim().toLowerCase(), tower: f.tower, flat: f.flat.trim() });
+    if (real) {
+      const { error } = await supabase.auth.verifyOtp({ email: f.email.trim().toLowerCase(), token: code, type: 'email' });
+      setBusy(false);
+      if (error) return setErr(friendly(error.message));
+      supabase.auth.signOut({ scope: 'local' }).catch(() => {});
+      return done();
+    }
+    setBusy(false);
+    return code === demoOtp ? done() : setErr('That OTP does not match. Try again.');
+  };
   return (
     <Modal title="Sign in to order" onClose={onClose}>
-      {!otp ? (
+      {stage === 'form' ? (
         <div className="space-y-3">
           <input className={field} placeholder="Your name" value={f.name} onChange={set('name')} />
-          <input className={field} placeholder="10-digit WhatsApp number" inputMode="numeric" maxLength={10} value={f.phone} onChange={set('phone')} />
+          <input className={field} placeholder="10-digit mobile number (for delivery)" inputMode="numeric" maxLength={10} value={f.phone} onChange={set('phone')} />
+          {real && <input className={field} type="email" placeholder="Email address (we send your code here)" autoComplete="email" value={f.email} onChange={set('email')} />}
           <div className="grid grid-cols-2 gap-3">
             <select className={field} value={f.tower} onChange={set('tower')}>{TOWERS.map((t) => <option key={t}>{t}</option>)}</select>
             <input className={field} placeholder="Flat number" value={f.flat} onChange={set('flat')} />
           </div>
+          {!real && <p className="text-xs text-ink/60">Demo mode: no email service is connected, so the code is shown on screen.</p>}
           {err && <p className="text-sm text-chili">{err}</p>}
-          <button className={cx(btnP, 'w-full')} onClick={send}>Send OTP</button>
+          <button className={cx(btnP, 'w-full')} disabled={busy} onClick={send}>{busy ? 'Sending…' : real ? 'Email me a code' : 'Send OTP'}</button>
         </div>
       ) : (
         <div className="space-y-3">
-          <div className="flex items-center justify-between rounded-lg bg-haldi/30 p-3 text-sm">
-            <span>Demo OTP: <b className="tracking-widest">{otp}</b></span>
-            <button className="font-bold underline" onClick={() => setTyped(otp)}>Auto-fill</button>
-          </div>
-          <input className={cx(field, 'text-center text-xl tracking-[0.5em]')} maxLength={4} inputMode="numeric" value={typed} onChange={(e) => setTyped(e.target.value)} placeholder="----" />
+          {real ? <p className="text-sm">We sent a code to <b>{f.email.trim().toLowerCase()}</b>. Check your inbox (and spam folder).</p> : (
+            <div className="flex items-center justify-between rounded-lg bg-haldi/30 p-3 text-sm">
+              <span>Demo OTP: <b className="tracking-widest">{demoOtp}</b></span>
+              <button className="font-bold underline" onClick={() => setTyped(demoOtp)}>Auto-fill</button>
+            </div>
+          )}
+          <input className={cx(field, 'text-center text-xl tracking-[0.4em]')} maxLength={8} inputMode="numeric" autoComplete="one-time-code" value={typed} onChange={(e) => setTyped(e.target.value.replace(/\D/g, ''))} onKeyDown={(e) => e.key === 'Enter' && verify()} placeholder="------" />
           {err && <p className="text-sm text-chili">{err}</p>}
-          <button className={cx(btnP, 'w-full')} onClick={verify}>Verify and continue</button>
+          <button className={cx(btnP, 'w-full')} disabled={busy} onClick={verify}>{busy ? 'Checking…' : 'Verify and continue'}</button>
+          <div className="flex justify-between text-sm">
+            <button className="underline" onClick={() => { setStage('form'); setErr(''); }}>Change details</button>
+            {real && <button className="underline disabled:opacity-40 disabled:no-underline" disabled={cool > 0 || busy} onClick={send}>{cool > 0 ? `Resend in ${cool}s` : 'Resend code'}</button>}
+          </div>
         </div>
       )}
     </Modal>
@@ -304,6 +348,7 @@ function Resident({ ctx }) {
             <div className="mt-4 grid gap-3 sm:grid-cols-2">
               {shown.map((m) => (
                 <div key={m.id} className={cx('flex items-center gap-3 rounded-xl border border-ink/15 bg-card p-3', !m.inStock && 'opacity-50')}>
+                  {m.img && <img src={m.img} alt={m.name} loading="lazy" className="h-20 w-20 shrink-0 rounded-lg object-cover" />}
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2"><VegDot veg={m.veg} /><h3 className="truncate font-semibold">{m.name}</h3></div>
                     <p className="text-xs text-ink/65">{m.category} · {m.desc}</p>
@@ -400,12 +445,12 @@ function Resident({ ctx }) {
 }
 
 /* -------------------------------- ADMIN -------------------------------- */
-const readFile = (file, cb, max = 900) => {
+const readFile = (file, cb, max = 900, quality = 0.72) => {
   if (!file) return;
   const r = new FileReader();
   r.onload = () => {
     const img = new Image();
-    img.onload = () => { const k = Math.min(1, max / Math.max(img.width, img.height)); const c = document.createElement('canvas'); c.width = Math.round(img.width * k); c.height = Math.round(img.height * k); c.getContext('2d').drawImage(img, 0, 0, c.width, c.height); cb(c.toDataURL('image/jpeg', 0.72)); };
+    img.onload = () => { const k = Math.min(1, max / Math.max(img.width, img.height)); const c = document.createElement('canvas'); c.width = Math.round(img.width * k); c.height = Math.round(img.height * k); c.getContext('2d').drawImage(img, 0, 0, c.width, c.height); cb(c.toDataURL('image/jpeg', quality)); };
     img.onerror = () => cb(r.result);
     img.src = r.result;
   };
@@ -557,9 +602,13 @@ function StockTab({ menu, setMenu, cfg, setCfg }) {
         <label className={cx(btnO, 'cursor-pointer')}><Upload size={14} className="mr-1 inline" />Upload menu pamphlet<input type="file" accept="image/*" className="hidden" onChange={(e) => readFile(e.target.files[0], (img) => setCfg({ ...cfg, menuImg: img }), 1400)} /></label>
       </div>
       {menu.map((m) => (
-        <div key={m.id} className="flex items-center gap-3 rounded-xl bg-card p-3 text-sm">
+        <div key={m.id} className="flex flex-wrap items-center gap-3 rounded-xl bg-card p-3 text-sm">
+          <label className="flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center overflow-hidden rounded-lg border border-dashed border-ink/30" title="Upload photo">
+            {m.img ? <img src={m.img} alt="" className="h-full w-full object-cover" /> : <Upload size={16} />}
+            <input type="file" accept="image/*" className="hidden" onChange={(e) => readFile(e.target.files[0], (d) => upd(m.id, { img: d }), 420, 0.6)} />
+          </label>
           <VegDot veg={m.veg} /><span className="min-w-0 flex-1 truncate">{m.name}<span className="ml-2 text-xs text-ink/50">{m.category}</span></span>
-          <span>₹</span><input className={cx(field, 'w-20')} type="number" min="0" value={m.price} onChange={(e) => upd(m.id, { price: Number(e.target.value) || 0 })} />
+          {m.img && <button className="text-xs underline" onClick={() => upd(m.id, { img: null })}>Remove photo</button>}<span>₹</span><input className={cx(field, 'w-20')} type="number" min="0" value={m.price} onChange={(e) => upd(m.id, { price: Number(e.target.value) || 0 })} />
           <button className={cx(btn, m.inStock ? 'bg-leaf text-white' : 'bg-chili text-white')} onClick={() => upd(m.id, { inStock: !m.inStock })}>{m.inStock ? 'In stock' : 'Sold out'}</button>
         </div>
       ))}
