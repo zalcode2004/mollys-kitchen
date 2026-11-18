@@ -1,11 +1,15 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { ShoppingBag, Search, X, Plus, Minus, Clock, ChefHat, Check, Copy, RotateCcw, Truck, MessageCircle, LogOut, Utensils, Upload, FileText, Sun, Moon } from 'lucide-react';
 import { supabase } from './supabaseClient';
-import { TOWERS, WA_NUMBER, STAFF_USER, STAFF_PASS, STAGES, CUTOFFS, SLOTS, ADDONS, SABZIS, PHOTO_PRESETS, CATEGORIES, THALIS0, MENU0 } from './data';
+import { TOWERS, WA_NUMBER, STAFF_USER, STAFF_PASS, STAGES, SLOTS, ADDONS, SABZIS, PHOTO_PRESETS, CATEGORIES, THALIS0, MENU0 } from './data';
 
 const API = import.meta.env.VITE_API_URL || '';
-const RZP_KEY = import.meta.env.VITE_RAZORPAY_KEY_ID || '';
 const inr = (n) => `₹${n}`;
+// ---- timing helpers: times are stored as "8:45 PM" text; <input type="time"> uses "20:45" ----
+const to24 = (label) => { const m = /^(\d{1,2}):(\d{2})\s*(AM|PM)$/i.exec(label || ''); if (!m) return ''; let h = Number(m[1]) % 12; if (m[3].toUpperCase() === 'PM') h += 12; return `${String(h).padStart(2, '0')}:${m[2]}`; };
+const to12 = (v) => { if (!v) return ''; const [H, M] = v.split(':').map(Number); return `${H % 12 || 12}:${String(M).padStart(2, '0')} ${H >= 12 ? 'PM' : 'AM'}`; };
+const addMins = (v, n) => { const [H, M] = v.split(':').map(Number); const t = Math.min(23 * 60 + 59, H * 60 + M + n); return `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`; };
+const CFG_DEFAULTS = { open: '6:00 PM', cutoff: '8:45 PM', instantMins: 30, slots: SLOTS.slice(1), demo: true, counter: 101, menuImg: null };
 const cx = (...a) => a.filter(Boolean).join(' ');
 const btn = 'rounded-full px-4 py-2 text-sm font-semibold transition active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed';
 const btnP = `${btn} bg-chili text-white hover:bg-red-700`;
@@ -25,14 +29,20 @@ async function api(path, method, body) {
 const toRow = (o) => ({ token: o.token, resident_name: o.name, resident_phone: o.phone, tower: o.tower, flat: o.flat, delivery_slot: o.slot, payment_method: o.payMethod, payment_status: o.payStatus, razorpay_order_id: o.rzpOrderId || null, razorpay_payment_id: o.rzpPaymentId || null, total_inr: o.total, status: o.status, items: o.items });
 const fromRow = (r) => ({ id: r.id, dbId: r.id, token: r.token, name: r.resident_name, phone: r.resident_phone, tower: r.tower, flat: r.flat, slot: r.delivery_slot, payMethod: r.payment_method, payStatus: r.payment_status, rzpOrderId: r.razorpay_order_id, rzpPaymentId: r.razorpay_payment_id, total: r.total_inr, status: r.status, items: r.items, at: new Date(r.created_at).getTime() });
 
-function useCountdown(label) {
+const atLabel = (label, base, fallback) => {
+  const m = /^(\d{1,2}):(\d{2})\s*(AM|PM)$/i.exec(label || '');
+  const d = new Date(base);
+  if (!m) { d.setHours(fallback[0], fallback[1], 0, 0); return d; }
+  let h = Number(m[1]) % 12;
+  if (m[3].toUpperCase() === 'PM') h += 12;
+  d.setHours(h, Number(m[2]), 0, 0);
+  return d;
+};
+function useCountdown(cutoff, open) {
   const [now, setNow] = useState(Date.now());
   useEffect(() => { const t = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(t); }, []);
-  const [t, ap] = label.split(' ');
-  let [h, m] = t.split(':').map(Number);
-  if (ap === 'PM' && h < 12) h += 12;
-  const end = new Date(now); end.setHours(h, m, 0, 0);
-  const start = new Date(now); start.setHours(18, 0, 0, 0);
+  const end = atLabel(cutoff, now, [20, 45]);
+  const start = atLabel(open, now, [18, 0]);
   const left = end - now;
   const s = Math.max(0, Math.floor(left / 1000));
   const fmt = [Math.floor(s / 3600), Math.floor((s % 3600) / 60), s % 60].map((x) => String(x).padStart(2, '0')).join(':');
@@ -155,7 +165,7 @@ function LoginModal({ onDone, onClose }) {
   );
 }
 
-function ThaliCard({ t, orderable, onAdd, inCart }) {
+function ThaliCard({ t, orderable, openLabel, onAdd, inCart }) {
   const pct = Math.round((t.left / t.total) * 100);
   const soldOut = t.left <= 0;
   return (
@@ -173,7 +183,7 @@ function ThaliCard({ t, orderable, onAdd, inCart }) {
         <div className="flex items-center justify-between pt-1">
           <span className="font-display text-2xl font-extrabold">{inr(t.price)}</span>
           <button className={btnP} disabled={!orderable || soldOut || inCart >= t.left} onClick={() => onAdd(t)}>
-            {soldOut ? 'Sold out' : orderable ? (inCart ? `Add another (${inCart})` : 'Add to cart') : 'Opens 6:00 PM'}
+            {soldOut ? 'Sold out' : orderable ? (inCart ? `Add another (${inCart})` : 'Add to cart') : `Opens ${openLabel}`}
           </button>
         </div>
       </div>
@@ -254,7 +264,8 @@ function Resident({ ctx }) {
   const [receipt, setReceipt] = useState(null);
   const [tab, setTab] = useState('shop');
   const [busy, setBusy] = useState(false);
-  const cd = useCountdown(cfg.cutoff);
+  const cd = useCountdown(cfg.cutoff, cfg.open);
+  const instant = `Instant Fast-Food (${cfg.instantMins} mins)`;
   const orderable = cfg.demo || cd.open;
 
   const total = cart.reduce((s, i) => s + i.price * i.qty, 0);
@@ -262,7 +273,7 @@ function Resident({ ctx }) {
   // Slot rules: fast food only -> Instant (30 mins) only; any thali (alone or with fast food) -> scheduled dinner slots only.
   const hasThali = cart.some((i) => i.type === 'thali');
   const hasFood = cart.some((i) => i.type === 'item');
-  const allowedSlots = hasFood && !hasThali ? [SLOTS[0]] : SLOTS.slice(1);
+  const allowedSlots = hasFood && !hasThali ? [instant] : (cfg.slots.length ? cfg.slots : [instant]);
   const slotSel = allowedSlots.includes(slot) ? slot : allowedSlots[0];
   const addCart = (line) => setCart((c) => { const k = c.findIndex((x) => x.key === line.key); return k >= 0 ? c.map((x, j) => (j === k ? { ...x, qty: x.qty + line.qty } : x)) : [...c, line]; });
   const setLineQty = (key, qty) => setCart((c) => (qty <= 0 ? c.filter((x) => x.key !== key) : c.map((x) => (x.key === key ? { ...x, qty } : x))));
@@ -279,13 +290,14 @@ function Resident({ ctx }) {
   const checkout = async () => {
     if (!resident) return setLogin(true);
     if (pay === 'Cash on Delivery') return finalize(null);
-    if (API && RZP_KEY && health?.razorpayConnected) {
+    if (API && health?.razorpayConnected) {
       setBusy(true);
       try {
         if (!window.Razorpay) await new Promise((res, rej) => { const s = document.createElement('script'); s.src = 'https://checkout.razorpay.com/v1/checkout.js'; s.onload = res; s.onerror = rej; document.body.appendChild(s); });
         const o = await api('/api/payment/create-order', 'POST', { amountInr: total, residentName: resident.name, phone: resident.phone, tower: resident.tower, flat: resident.flat });
+        if (!o.id || !o.key_id) throw new Error('Payment server not ready');
         const rz = new window.Razorpay({
-          key: RZP_KEY, amount: o.amount, currency: 'INR', order_id: o.id, name: "Molly's Kitchen", description: 'Dinner order', prefill: { name: resident.name, contact: resident.phone },
+          key: o.key_id, amount: o.amount, currency: 'INR', order_id: o.id, name: "Molly's Kitchen", description: 'Dinner order', prefill: { name: resident.name, contact: resident.phone },
           theme: { color: '#D8392B' },
           modal: { ondismiss: () => setBusy(false) },
           handler: async (r) => {
@@ -322,12 +334,12 @@ function Resident({ ctx }) {
               </div>
               <div className={cx('rounded-xl px-4 py-2 text-sm font-semibold', orderable ? 'bg-leaf text-white' : 'bg-ink text-paper')}>
                 <Clock size={14} className="mr-1 inline" />
-                {cd.before && !cfg.demo ? 'Booking opens at 6:00 PM' : cd.open || cfg.demo ? `Dinner orders close in ${cd.open ? cd.fmt : '--'} (${cfg.cutoff})` : `Dinner orders closed (${cfg.cutoff})`}
+                {cd.before && !cfg.demo ? `Booking opens at ${cfg.open}` : cd.open || cfg.demo ? `Dinner orders close in ${cd.open ? cd.fmt : '--'} (${cfg.cutoff})` : `Dinner orders closed (${cfg.cutoff})`}
               </div>
             </div>
             <div className="mt-4 grid gap-4 md:grid-cols-2">
               {thalis.filter((t) => t.active).map((t) => (
-                <ThaliCard key={t.id} t={t} orderable={orderable} inCart={cart.find((c) => c.id === t.id)?.qty || 0}
+                <ThaliCard key={t.id} t={t} orderable={orderable} openLabel={cfg.open} inCart={cart.find((c) => c.id === t.id)?.qty || 0}
                   onAdd={() => addCart({ key: t.id, id: t.id, type: 'thali', name: t.sabzi ? `${t.sabzi} Thali` : 'Chole Puri Thali', price: t.price, qty: 1 })} />
               ))}
             </div>
@@ -546,19 +558,58 @@ function PrepTab({ orders, thalis, setStatus }) {
   );
 }
 
+function TimingsEditor({ cfg, setCfg }) {
+  const set = (patch) => setCfg({ ...cfg, ...patch });
+  const { slots } = cfg;
+  const parse = (x) => { const [a, b] = String(x).split(' - '); return [to24(a), to24(b)]; };
+  const setSlot = (i, a, b) => set({ slots: slots.map((x, k) => (k === i ? `${to12(a)} - ${to12(b)}` : x)) });
+  const bad = (x) => { const [a, b] = parse(x); return !a || !b || b <= a; };
+  const cutBad = to24(cfg.cutoff) <= to24(cfg.open);
+  const addSlot = () => { const last = slots.length ? parse(slots[slots.length - 1])[1] : '19:30'; const a = last || '19:30'; set({ slots: [...slots, `${to12(a)} - ${to12(addMins(a, 30))}`] }); };
+  const lab = 'block text-sm font-semibold';
+  return (
+    <section className="space-y-4 rounded-2xl bg-card p-4">
+      <h2 className="font-display text-xl font-bold">Timings</h2>
+      <div className="grid gap-3 sm:grid-cols-3">
+        <label className={lab}>Booking opens at<input type="time" className={cx(field, 'mt-1')} value={to24(cfg.open)} onChange={(e) => e.target.value && set({ open: to12(e.target.value) })} /></label>
+        <label className={lab}>Order cutoff<input type="time" className={cx(field, 'mt-1')} value={to24(cfg.cutoff)} onChange={(e) => e.target.value && set({ cutoff: to12(e.target.value) })} /></label>
+        <label className={lab}>Instant fast-food delivery (minutes)<input type="number" min="10" max="180" step="5" className={cx(field, 'mt-1')} value={cfg.instantMins} onChange={(e) => set({ instantMins: Math.min(180, Math.max(10, Number(e.target.value) || 30)) })} /></label>
+      </div>
+      {cutBad && <p className="text-sm text-chili">The cutoff is not after the opening time, so dinner orders will always show as closed.</p>}
+      <div>
+        <p className="mb-2 text-sm font-semibold">Dinner delivery slots</p>
+        {slots.map((x, i) => {
+          const [a, b] = parse(x);
+          return (
+            <div key={i} className="mb-2 flex flex-wrap items-center gap-2">
+              <input type="time" aria-label="Slot start" className={cx(field, 'w-32')} value={a} onChange={(e) => e.target.value && setSlot(i, e.target.value, b || e.target.value)} />
+              <span className="text-sm">to</span>
+              <input type="time" aria-label="Slot end" className={cx(field, 'w-32')} value={b} onChange={(e) => e.target.value && setSlot(i, a || e.target.value, e.target.value)} />
+              <button className={btnO} disabled={slots.length <= 1} onClick={() => set({ slots: slots.filter((_, k) => k !== i) })}>Remove</button>
+              {bad(x) && <span className="text-xs text-chili">End must be after start</span>}
+            </div>
+          );
+        })}
+        <div className="mt-1 flex flex-wrap gap-2">
+          <button className={btnO} onClick={addSlot}><Plus size={14} className="mr-1 inline" />Add slot</button>
+          <button className={btnO} onClick={() => set({ open: CFG_DEFAULTS.open, cutoff: CFG_DEFAULTS.cutoff, instantMins: CFG_DEFAULTS.instantMins, slots: CFG_DEFAULTS.slots })}>Reset to default timings</button>
+        </div>
+      </div>
+      <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={cfg.demo} onChange={() => set({ demo: !cfg.demo })} />Testing mode: accept dinner orders at any time of day (turn off to enforce the opening and cutoff times)</label>
+    </section>
+  );
+}
+
 function PublishTab({ thalis, setThalis, cfg, setCfg }) {
   const [copied, setCopied] = useState(false);
   const upd = (id, patch) => setThalis((ts) => ts.map((t) => (t.id === id ? { ...t, ...patch } : t)));
   const s = thalis.find((t) => t.sabzi !== null && t.rotis > 0);
   const c = thalis.find((t) => t.puris > 0);
-  const msg = `🍽️ *Molly's Kitchen — Tonight's Dinner @ ₹139*\nMigsun Twiinz, ETA 2\n\n${thalis.filter((t) => t.active).map((t, i) => `${i + 1}. ${t.sabzi ? `${t.sabzi} + ${t.rotis} Roti + Dal Fry + Rice + Salad` : 'Chole + Rice + 5 Puri + Salad'} — ₹${t.price} (${t.left} plates)`).join('\n')}\n\nOrder before ${cfg.cutoff}. Delivery 7:30–9:30 PM, FREE to SUN 1–SUN 10.\nPay online (UPI/Card) or Cash on Delivery.\nOrder here: ${typeof window !== 'undefined' ? window.location.origin : ''}`;
+  const win = cfg.slots.length ? `${cfg.slots[0].split(' - ')[0]} to ${cfg.slots[cfg.slots.length - 1].split(' - ')[1]}` : '';
+  const msg = `🍽️ *Molly's Kitchen — Tonight's Dinner @ ₹139*\nMigsun Twiinz, ETA 2\n\n${thalis.filter((t) => t.active).map((t, i) => `${i + 1}. ${t.sabzi ? `${t.sabzi} + ${t.rotis} Roti + Dal Fry + Rice + Salad` : 'Chole + Rice + 5 Puri + Salad'} — ₹${t.price} (${t.left} plates)`).join('\n')}\n\nOrder ${cfg.open} to ${cfg.cutoff}. Delivery ${win}, FREE to SUN 1–SUN 10.\nPay online (UPI/Card) or Cash on Delivery.\nOrder here: ${typeof window !== 'undefined' ? window.location.origin : ''}`;
   return (
     <div className="space-y-6">
-      <section className="space-y-2">
-        <h2 className="font-display text-xl font-bold">Order cutoff and timing</h2>
-        <div className="flex flex-wrap gap-2">{CUTOFFS.map((x) => <button key={x} className={cx(btn, cfg.cutoff === x ? 'bg-ink text-paper' : 'border border-ink/25')} onClick={() => setCfg({ ...cfg, cutoff: x })}>{x}</button>)}</div>
-        <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={cfg.demo} onChange={() => setCfg({ ...cfg, demo: !cfg.demo })} />Demo mode: accept dinner orders at any time of day (turn off for real 6:00 PM – cutoff booking)</label>
-      </section>
+      <TimingsEditor cfg={cfg} setCfg={setCfg} />
       {thalis.map((t) => (
         <section key={t.id} className="space-y-3 rounded-2xl bg-card p-4">
           <div className="flex items-center justify-between"><h3 className="font-display font-bold">{t.title}</h3><label className="text-sm"><input type="checkbox" checked={t.active} onChange={() => upd(t.id, { active: !t.active })} /> On tonight</label></div>
@@ -655,7 +706,8 @@ export default function App() {
   const [resident, setResident] = useLS('mk_migsun_resident', null);
   const [menu, setMenu] = useLS('mk_menu', MENU0);
   const [thalis, setThalis] = useLS('mk_thalis', THALIS0);
-  const [cfg, setCfg] = useLS('mk_cfg', { cutoff: '8:45 PM', demo: true, counter: 101, menuImg: null });
+  const [cfgRaw, setCfg] = useLS('mk_cfg', CFG_DEFAULTS);
+  const cfg = useMemo(() => ({ ...CFG_DEFAULTS, ...cfgRaw }), [cfgRaw]);
   const [orders, setOrders] = useLS('mk_orders', []);
   const [staff, setStaff] = useLS('mk_staff', false);
   const [theme, setTheme] = useLS('mk_theme', 'dark');
