@@ -46,7 +46,7 @@ app.post('/api/admin/login', (req, res) => {
   if (username !== expectedUser || password !== expectedPass) {
     return res.status(401).json({ error: 'Wrong username or password' });
   }
-  return res.json({ authenticated: true, kitchen: "Molly's Kitchen — Migsun Twiinz" });
+  return res.json({ authenticated: true, kitchen: "Molly's Kitchen — Migsun Twiinz"});
 });
 
 // 2. Create Razorpay Order (Amount in Paise, Free Delivery across SUN 1–SUN 10)
@@ -81,7 +81,8 @@ app.post('/api/payment/create-order', async (req, res) => {
       }
     });
 
-    res.json(order);
+    // The public Key ID is handed to the browser only when a payment starts, so no Razorpay key needs to live in the website's code or on GitHub.
+    res.json({ ...order, key_id: process.env.RAZORPAY_KEY_ID });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
